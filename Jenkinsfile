@@ -1,46 +1,64 @@
 pipeline {
     agent any
 
+    environment {
+        VENV = ".venv"
+        APP_PORT = "5000"
+    }
+
     stages {
-        stage('Clone Repo') {
+        stage('Clone Repo (GitHub)') {
             steps {
+                echo "Cloning repository from GitHub..."
                 checkout scm
             }
         }
-        stage('Install Dependencies') {
+
+        stage('Install Dependencies (requirements.txt)') {
             steps {
-                sh '''
-                    python3 -m venv .venv
-                    . .venv/bin/activate
-                    pip install --upgrade pip
+                bat '''
+                    py --version
+                    py -m venv %VENV%
+                    call %VENV%\\Scripts\\activate
+                    python -m pip install --upgrade pip
                     pip install -r requirements.txt
                 '''
             }
         }
-        stage('Run Unit Tests') {
+
+        stage('Run Unit Tests (pytest)') {
             steps {
-                sh '''
-                    . .venv/bin/activate
-                    pytest
+                bat '''
+                    call %VENV%\\Scripts\\activate
+                    pytest -q
                 '''
             }
         }
-        stage('Build') {
+
+        stage('Build Application (Package Artifact)') {
             steps {
-                sh '''
-                    rm -rf dist
-                    mkdir -p dist
-                    cp app.py requirements.txt dist/
+                bat '''
+                    if exist dist rmdir /s /q dist
+                    mkdir dist
+                    copy app.py dist\\
+                    copy requirements.txt dist\\
+                    dir dist
                 '''
-                archiveArtifacts artifacts: 'dist/**', fingerprint: true
+            }
+            post {
+                success {
+                    archiveArtifacts artifacts: 'dist/**', fingerprint: true
+                }
             }
         }
-        stage('Deploy') {
+
+        stage('Deploy (Run Flask App)') {
             steps {
-                sh '''
-                    nohup python3 app.py > flask_app.log 2>&1 &
-                    sleep 2
-                    curl http://127.0.0.1:5000/health
+                bat '''
+                    call %VENV%\\Scripts\\activate
+                    start /B python app.py > flask_app.log 2>&1
+                    timeout /t 2 /nobreak
+                    powershell -NoProfile -Command "try { (Invoke-WebRequest -UseBasicParsing http://127.0.0.1:%APP_PORT%/health).Content } catch { 'HEALTHCHECK_FAILED' }"
                 '''
             }
         }
@@ -51,7 +69,7 @@ pipeline {
             archiveArtifacts artifacts: 'flask_app.log', allowEmptyArchive: true
         }
         failure {
-            echo 'Pipeline failed.'
+            echo "Pipeline failed."
         }
     }
 }
